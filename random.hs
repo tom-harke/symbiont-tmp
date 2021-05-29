@@ -47,13 +47,17 @@ output: G (Generator state)
 
 type Key      = ByteString
 type Counter  = Int32
-data GenState = GS { key :: Key, count :: Counter }
+data GenState a = GS { key :: Key, count :: Counter }
    deriving Show
+
+data New = New
+
+data Seeded = Seeded
 
 inject :: Int32 -> ByteString
 inject = B.concat . BL.toChunks . toByteString . int32BE
 
-initializeGenerator :: GenState
+initializeGenerator :: GenState New
 initializeGenerator = GS (inject 0) 0
 
 -- https://stackoverflow.com/questions/7815402/convert-a-lazy-bytestring-to-a-strict-bytestring
@@ -75,7 +79,7 @@ type Seed = ByteString
 todo :: Digest SHA256 -> ByteString
 todo = undefined
 
-reseed :: GenState -> Seed -> GenState
+reseed :: GenState a -> Seed -> GenState Seeded
 reseed g s =
    GS
       { key   = todo $ hash $ B.concat [key g,s]
@@ -109,16 +113,13 @@ encrypt key plainData = ctrCombine ctx nullIV plainData
 
 -- )
 
-generateBlocks :: GenState -> Int32 -> (ByteString,GenState)
+generateBlocks :: GenState Seeded -> Int32 -> (ByteString,GenState Seeded)
 generateBlocks g k =
-   let c = count g
+   let
+      c = count g
+      r = B.concat $ map (encrypt $ key g) $ map inject $ [c .. c+k-1]
    in
-      if c == 0
-      then
-         error "generator not initialized"
-      else
-         let r = B.concat $ map (encrypt $ key g) $ map inject $ [c .. c+k-1]
-         in  (r, GS{ key = key g, count = c+k })
+      (r, GS{ key = key g, count = c+k })
 
 {-
 function PseudoRandomData
@@ -151,10 +152,10 @@ output: R // prng state.
   return R
 -}
 
-data PRNGState = PS { g :: GenState, reseedCnt :: Counter, p :: [ByteString] }
+data PRNGState a = PS { g :: GenState a, reseedCnt :: Counter, p :: [ByteString] }
    deriving Show
 
-initializePRNG :: PRNGState
+initializePRNG :: PRNGState New
 initializePRNG = PS
    { g         = initializeGenerator
    , reseedCnt = 0
