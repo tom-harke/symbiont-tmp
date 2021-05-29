@@ -1,4 +1,7 @@
 
+import           Crypto.Cipher.AES       (AES256)
+import           Crypto.Cipher.Types     (BlockCipher(..), Cipher(..),nullIV)
+import           Crypto.Error            (throwCryptoError)
 import           Crypto.Hash             (hash, SHA256 (..), Digest)
 import           Data.ByteString         (ByteString)
 import           Data.Text.Encoding      (encodeUtf8)
@@ -44,9 +47,10 @@ output: G (Generator state)
 
 type Key      = ByteString
 type Counter  = Int32
-data GenState = GS { k :: Key, c :: Counter }
+data GenState = GS { key :: Key, count :: Counter }
    deriving Show
 
+inject :: Int32 -> ByteString
 inject = B.concat . BL.toChunks . toByteString . int32BE
 
 initializeGenerator :: GenState
@@ -74,8 +78,8 @@ todo = undefined
 reseed :: GenState -> Seed -> GenState
 reseed g s =
    GS
-      { k = todo $ hash $ B.concat [k g,s]
-      , c = 1 + c g
+      { key   = todo $ hash $ B.concat [key g,s]
+      , count = 1 + count g
       }
 
 {-
@@ -93,6 +97,28 @@ output: r // Pseudorandom string of 16k bytes.
   od
   return r
 -}
+
+
+-- (
+-- AES256 encryption
+-- taken directly from https://stackoverflow.com/questions/42456724/how-to-use-haskell-cryptonite/42459006
+encrypt :: ByteString -> ByteString -> ByteString
+encrypt key plainData = ctrCombine ctx nullIV plainData
+  where ctx :: AES256
+        ctx = throwCryptoError $ cipherInit key
+
+-- )
+
+generateBlocks :: GenState -> Int32 -> (ByteString,GenState)
+generateBlocks g k =
+   let c = count g
+   in
+      if c == 0
+      then
+         error "generator not initialized"
+      else
+         let r = B.concat $ map (encrypt $ key g) $ map inject $ [c .. c+k-1]
+         in  (r, GS{ key = key g, count = c+k })
 
 {-
 function PseudoRandomData
