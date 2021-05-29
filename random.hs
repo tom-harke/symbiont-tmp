@@ -10,8 +10,8 @@ import           Data.ByteString.Builder
 import qualified Data.ByteString.Lazy          as BL
 import qualified Data.ByteString               as B
 
-main :: IO ()
-main = do
+eg :: IO ()
+eg = do
   putStr "Enter some text: "
   hFlush stdout
   text <- TIO.getLine
@@ -52,6 +52,7 @@ inject = B.concat . BL.toChunks . toByteString . int32BE
 initializeGenerator :: GenState
 initializeGenerator = GS (inject 0) 0
 
+-- https://stackoverflow.com/questions/7815402/convert-a-lazy-bytestring-to-a-strict-bytestring
 
 {-
 function Reseed
@@ -64,6 +65,18 @@ input: G // Generator state; modified by this function.
   // using the LSByte first convention.
   C ← C + 1
 -}
+
+type Seed = ByteString
+
+todo :: Digest SHA256 -> ByteString
+todo = undefined
+
+reseed :: GenState -> Seed -> GenState
+reseed g s =
+   GS
+      { k = todo $ hash $ B.concat [k g,s]
+      , c = 1 + c g
+      }
 
 {-
 function GenerateBlocks
