@@ -1,17 +1,24 @@
 
+-- Todo
+--   - write up what I won't do
+--   - write up deviations from Schneier
+--   - recast w/ state monad
+--   - convert Digest-to-ByteString
+--   - rm eg code
+
 import           Crypto.Cipher.AES       (AES256)
 import           Crypto.Cipher.Types     (BlockCipher(..), Cipher(..),nullIV)
 import           Crypto.Error            (throwCryptoError)
 import           Crypto.Hash             (hash, SHA256 (..), Digest)
 import           Data.ByteString         (ByteString)
+import qualified Data.ByteString               as B
+import           Data.ByteString.Builder
+import           Data.ByteString.Conversion
+import qualified Data.ByteString.Lazy          as BL
+import           Data.Int
 import           Data.Text.Encoding      (encodeUtf8)
 import qualified Data.Text.IO            as TIO
 import           System.IO               (hFlush, stdout)
-import           Data.Int
-import           Data.ByteString.Conversion
-import           Data.ByteString.Builder
-import qualified Data.ByteString.Lazy          as BL
-import qualified Data.ByteString               as B
 
 eg :: IO ()
 eg = do
@@ -45,14 +52,16 @@ output: G (Generator state)
   return G
 -}
 
-type Key      = ByteString
-type Counter  = Int32
 data GenState a = GS { key :: Key, count :: Counter }
    deriving Show
 
-data New = New
+-- types for readability
+type Key      = ByteString
+type Counter  = Int32
+-- indexes for GenState
+data New      = New
+data Seeded   = Seeded
 
-data Seeded = Seeded
 
 inject :: Int32 -> ByteString
 inject = B.concat . BL.toChunks . toByteString . int32BE
@@ -135,6 +144,13 @@ output: r // Pseudorandom string of n bytes.
   return r
 -}
 
+pseudoRandomData :: GenState Seeded -> Int32 -> (ByteString,GenState Seeded)
+pseudoRandomData g n =
+   let
+      (r,g2) = generateBlocks g n
+      (k,g3) = generateBlocks g 2
+   in
+      (r, GS{ key = k, count = count g3 })
 
 {-
 function InitializePRNG
