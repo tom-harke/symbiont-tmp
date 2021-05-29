@@ -4,6 +4,11 @@ import           Data.ByteString         (ByteString)
 import           Data.Text.Encoding      (encodeUtf8)
 import qualified Data.Text.IO            as TIO
 import           System.IO               (hFlush, stdout)
+import           Data.Int
+import           Data.ByteString.Conversion
+import           Data.ByteString.Builder
+import qualified Data.ByteString.Lazy          as BL
+import qualified Data.ByteString               as B
 
 main :: IO ()
 main = do
@@ -15,6 +20,7 @@ main = do
   let digest :: Digest SHA256
       digest = hash bs
   putStrLn $ "SHA256 hash: " ++ show digest
+
 
 {- pseudocode from chapter 9 of
       title: Design Principles and Practical Applications
@@ -35,6 +41,16 @@ output: G (Generator state)
   G ← (K, C)
   return G
 -}
+
+type Key      = ByteString
+type Counter  = Int32
+data GenState = GS { k :: Key, c :: Counter }
+   deriving Show
+
+inject = B.concat . BL.toChunks . toByteString . int32BE
+
+initializeGenerator :: GenState
+initializeGenerator = GS (inject 0) 0
 
 
 {-
