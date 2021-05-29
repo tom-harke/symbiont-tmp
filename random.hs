@@ -84,9 +84,9 @@ input: G // Generator state; modified by this function.
        k // Number of blocks to generate.
 output: r // Pseudorandom string of 16k bytes.
   assert C = 0
-  Start with the empty string.
+  // Start with the empty string.
   r ← ε
-  Append the necessary blocks.
+  // Append the necessary blocks.
   for i = 1,...,k do
     r ← r||E(K, C)
     C ← C + 1
@@ -114,16 +114,27 @@ function InitializePRNG
 output: R // prng state.
   // Set the 32 pools to the empty string.
   for i = 0..31 do
-    P i ← ε
+    P_i ← ε
   od
   // Set the reseed counter to zero.
   ReseedCnt ← 0
   // And initialize the generator.
   G ← InitializeGenerator()
   // Package up the state.
-  R ← (G, ReseedCnt, P 0 , . . . , P 31 )
+  R ← (G, ReseedCnt, P_0 .. P_31 )
   return R
 -}
+
+data PRNGState = PS { g :: GenState, reseedCnt :: Counter, p :: [ByteString] }
+   deriving Show
+
+initializePRNG :: PRNGState
+initializePRNG = PS
+   { g         = initializeGenerator
+   , reseedCnt = 0
+   , p         = replicate 32 B.empty
+   }
+
 
 {-
 function RandomData
