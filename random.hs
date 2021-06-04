@@ -1,45 +1,66 @@
+{- Problem:
+      reimplement /dev/random in the language of my choice
 
--- Todo
---   - write up what I won't do
---   - write up deviations from Schneier
---   - recast w/ state monad
---   - convert Digest-to-ByteString
---   - rm eg code
+   This exercise is a bad idea
+    - /dev/random is
+      - hardened
+      - efficient
+      - been examined by numerous experts
 
-import           Crypto.Cipher.AES       (AES256)
-import           Crypto.Cipher.Types     (BlockCipher(..), Cipher(..),nullIV)
-import           Crypto.Error            (throwCryptoError)
-import           Crypto.Hash             (hash, SHA256 (..), Digest)
-import           Data.ByteString         (ByteString)
-import qualified Data.ByteString               as B
-import           Data.ByteString.Builder
-import           Data.ByteString.Conversion
-import qualified Data.ByteString.Lazy          as BL
-import           Data.Int
-import           Data.Text.Encoding      (encodeUtf8)
-import qualified Data.Text.IO            as TIO
-import           System.IO               (hFlush, stdout)
+   Ignoring that, and pressing on with a fresh implementation I decided to appeal to authority & take a published algorithm.
+   I found Fortuna.
+   The following is a minimal draft of Fortuna in Haskell.
+   Fortuna ended up being overkill ... more than necessary, and taking longer than expected to get skeleton code running.
+   It has problems :-/
 
-eg :: IO ()
-eg = do
-  putStr "Enter some text: "
-  hFlush stdout
-  text <- TIO.getLine
-  let bs = encodeUtf8 text
-  putStrLn $ "You entered: " ++ show bs
-  let digest :: Digest SHA256
-      digest = hash bs
-  putStrLn $ "SHA256 hash: " ++ show digest
-
-
-{- pseudocode from chapter 9 of
+   The following code is based on chapter 9 of
       title: Design Principles and Practical Applications
       author:
          - Niels Ferguson
          - Bruce Schneier
          - Tadayoshi Kohno
       isbn: 978-0-470-47424-2
--}
+
+   It deviates in the following:
+    - it omits functions not used for the core task of generating entropy
+    - control of output is coarser -- instead of number of bytes you only get control of number of blocks
+    - it checks statically (instead of dynamically) whether the generator has been seeded.
+    - in RandomData it teases apart the defintion of the data from imperative control choosing
+
+
+   Problems encountered
+    - my unfamiliarity with libraries
+    - I didn't understand Fortuna until I finished coding it ;-)
+    - endless type conversions between Int-like types
+    - Crypto, supposedly pure, has run-time errors!
+
+
+   Won't do for example
+     - print outputs nicely as hex (I haven't yet found the function that does so)
+     - unit tests
+     - checks on Int sizes
+     - wire up logic for time-out
+     - wire up logic for min pool size
+
+   Opportunities to simplify code
+     - maybe the functions need to be in a monad
+     - ...
+ -}
+
+import           Crypto.Cipher.AES          (AES256)
+import           Crypto.Cipher.Types        (BlockCipher(..), Cipher(..),nullIV)
+import           Crypto.Error               (throwCryptoError)
+import           Crypto.Hash                (hash, SHA256 (..), Digest)
+import           Data.ByteString            (ByteString)
+import qualified Data.ByteArray             as BA
+import qualified Data.ByteString            as BS
+import           Data.ByteString.Builder
+import           Data.ByteString.Conversion
+import qualified Data.ByteString.Lazy       as BSL
+import           Data.Int
+import           Data.Text.Encoding         (encodeUtf8)
+import qualified Data.Text.IO               as TIO
+import           System.IO                  (hFlush, stdout)
 
 
 {-
@@ -53,23 +74,26 @@ output: G (Generator state)
 -}
 
 data GenState a = GS { key :: Key, count :: Counter }
-   deriving Show
+instance Show (GenState a)
+   where
+      show (GS k c) = "{ key = " ++ (show $ k) ++ ", count = " ++ show c ++ "}"
+
 
 -- types for readability
-type Key      = ByteString
+type Key      = Digest SHA256
 type Counter  = Int32
+type Length   = Int32
 -- indexes for GenState
 data New      = New
 data Seeded   = Seeded
 
 
 inject :: Int32 -> ByteString
-inject = B.concat . BL.toChunks . toByteString . int32BE
+inject = BS.concat . BSL.toChunks . toByteString . int32BE
 
 initializeGenerator :: GenState New
-initializeGenerator = GS (inject 0) 0
+initializeGenerator = GS (hash $ inject 0) 0 -- this deviates by using 'hash 0' instead of 0
 
--- https://stackoverflow.com/questions/7815402/convert-a-lazy-bytestring-to-a-strict-bytestring
 
 {-
 function Reseed
@@ -85,13 +109,13 @@ input: G // Generator state; modified by this function.
 
 type Seed = ByteString
 
-todo :: Digest SHA256 -> ByteString
-todo = undefined
+digest2str :: Digest SHA256 -> ByteString
+digest2str = BA.convert
 
 reseed :: GenState a -> Seed -> GenState Seeded
 reseed g s =
    GS
-      { key   = todo $ hash $ B.concat [key g,s]
+      { key   = hash $ BS.concat $ [digest2str $ key g,s]
       , count = 1 + count g
       }
 
@@ -119,14 +143,13 @@ encrypt :: ByteString -> ByteString -> ByteString
 encrypt key plainData = ctrCombine ctx nullIV plainData
   where ctx :: AES256
         ctx = throwCryptoError $ cipherInit key
-
 -- )
 
-generateBlocks :: GenState Seeded -> Int32 -> (ByteString,GenState Seeded)
+generateBlocks :: GenState Seeded -> Length -> (ByteString,GenState Seeded)
 generateBlocks g k =
    let
       c = count g
-      r = B.concat $ map (encrypt $ key g) $ map inject $ [c .. c+k-1]
+      r = BS.concat $ map (encrypt $ digest2str $ key g) $ map inject $ [c .. c+k-1]
    in
       (r, GS{ key = key g, count = c+k })
 
@@ -144,13 +167,13 @@ output: r // Pseudorandom string of n bytes.
   return r
 -}
 
-pseudoRandomData :: GenState Seeded -> Int32 -> (ByteString,GenState Seeded)
+pseudoRandomData :: GenState Seeded -> Length -> (ByteString,GenState Seeded)
 pseudoRandomData g n =
    let
       (r,g2) = generateBlocks g n
       (k,g3) = generateBlocks g 2
    in
-      (r, GS{ key = k, count = count g3 })
+      (r, GS{ key = hash k, count = count g3 })
 
 {-
 function InitializePRNG
@@ -168,14 +191,19 @@ output: R // prng state.
   return R
 -}
 
-data PRNGState a = PS { g :: GenState a, reseedCnt :: Counter, p :: [ByteString] }
-   deriving Show
+data PRNG_State a = PS { genstate  :: GenState a
+                       , reseedCnt :: Counter
+                       , pool      :: Int -> ByteString -- space leak
+                       }
+instance Show (PRNG_State a)
+   where
+      show (PS g r p) = "{ genstate = " ++ show g ++ ", reseedCnt = " ++ show r ++ ", pool = " ++ concat (map (show . p) [0..31]) ++ "}"
 
-initializePRNG :: PRNGState New
+initializePRNG :: PRNG_State New
 initializePRNG = PS
-   { g         = initializeGenerator
+   { genstate  = initializeGenerator
    , reseedCnt = 0
-   , p         = replicate 32 B.empty
+   , pool      = const BS.empty
    }
 
 
@@ -184,13 +212,13 @@ function RandomData
 input: R // prng state, modified by this function.
        n // Number of bytes of random data to generate.
 output: r // Pseudorandom string of bytes.
-  if length(P 0 ) ≥ MinPoolSize ∧ last reseed > 100 ms ago then
+  if length(P_0) ≥ MinPoolSize ∧ last reseed > 100 ms ago then
     // We need to reseed.
     ReseedCnt ← ReseedCnt + 1
     // Append the hashes of all the pools we will use.
     s ← ε
     for i ∈ 0, ... , 31 do
-      if 2 i | ReseedCnt then
+      if 2^i | ReseedCnt then
         s ← s || SHAd-256(P_i)
         P_i ← ε
       fi
@@ -198,7 +226,42 @@ output: r // Pseudorandom string of bytes.
     // Got the data, now do the reseed.
     Reseed(G, s)
   fi
+  if ReseedCnt = 0 then
+    // Generate error, prng not seeded yet
+  else
+    // Reseeds (if needed) are done. Let the generator that is part of R do the work.
+    return PseudoRandomData(G, n)
+  fi
 -}
+
+randomData_same_seed :: PRNG_State Seeded -> Length -> (ByteString, PRNG_State Seeded)
+randomData_same_seed (PS gen1 cnt1 pool1) n =
+   let
+      (bs,gen2) = pseudoRandomData gen1 n
+      r2        = PS gen2 cnt1 pool1
+   in
+      (bs,r2)
+
+
+randomData_reseed :: PRNG_State Seeded -> Length -> (ByteString, PRNG_State Seeded)
+randomData_reseed (PS gen1 cnt1 pool1) n =
+   let
+      len       = zeros (1 + cnt1)
+      pool2 i   = if i<len then BS.empty else pool1 i
+      gen2      = reseed gen1 $ BS.concat $ map pool1 $ [1..len]
+      (bs,gen3) = pseudoRandomData gen2 n
+      r2        = PS gen3 (1 + cnt1) pool2
+   in
+      (bs,r2)
+
+zeros c =
+   -- number of trailing 0's in the binary representation
+   -- i.e. the largest i such that 2^i|c
+   if 1 == c `mod` 2 || c < 1
+   then 0
+   else 1 + zeros (c `div` 2)
+
+unit_zeros = print $ map zeros $ [1..16]
 
 {-
 function AddRandomEvent
@@ -212,19 +275,52 @@ input: R // prng state, modified by this function.
   P_i ← P_i || s || length(e) || e
 -}
 
-{-
-function WriteSeedFile
-input: R // prng state, modified by this function.
-       f // File to write to.
-  write(f , RandomData(R, 64))
--}
+addRandomEvent :: PRNG_State Seeded -> Int32 -> Int -> ByteString -> PRNG_State Seeded
+addRandomEvent r s i e =
+   let
+      p = BS.concat [ pool r i
+                    , inject s
+                    , inject $ fromIntegral $ BS.length $ e
+                    , e
+                    ]
+   in
+      PS (genstate r)
+         (reseedCnt r)
+         (\n -> if n==i then p else pool r n)
 
-{-
-function UpdateSeedFile
-input: R // prng state, modified by this function.
-       f // File to be updated.
-  s ← read(f )
-  assert length(s) = 64
-  Reseed(G, s)
-  write(f , RandomData(R, 64))
--}
+
+
+-- an example
+
+main = eg
+eg =
+   let
+      prng1      = initializePRNG
+      prng2      = prng1 { genstate = reseed (genstate prng1) (inject 142857) }
+      (b1,prng3) = randomData_same_seed prng2 1
+      (b2,prng4) = randomData_same_seed prng3 60
+      prng5      = addRandomEvent prng4 197 3 $ BA.pack [3, 141, 59, 26, 53, 58]
+      (b3,prng6) = randomData_same_seed prng5 1
+      -- ...
+      prng_15     = prng6 { reseedCnt = 15 } -- fake up a history of 2^n-1 calls
+      (b16a,prng_16a) = randomData_same_seed prng_15 1
+      (b16b,prng_16b) = randomData_reseed    prng_15 1
+   in
+      do
+         putStrLn "Intermediate states"
+         putStrLn $ show prng1
+         putStrLn $ show prng2
+         putStrLn $ show prng3
+         putStrLn $ show prng4
+         putStrLn $ show prng5
+         putStrLn $ show prng6
+         putStrLn "Outputs"
+         putStrLn $ show b1
+         putStrLn $ show b2
+         putStrLn $ show b3
+         putStrLn "Difference between reseed & same seed"
+         putStrLn $ show prng_16a
+         putStrLn $ show b16a
+         putStrLn $ show prng_16b
+         putStrLn $ show b16b
+

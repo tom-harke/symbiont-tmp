@@ -1,0 +1,12 @@
+function WriteSeedFile
+input: R // prng state, modified by this function.
+       f // File to write to.
+  write(f , RandomData(R, 64))
+
+function UpdateSeedFile
+input: R // prng state, modified by this function.
+       f // File to be updated.
+  s ← read(f )
+  assert length(s) = 64
+  Reseed(G, s)
+  write(f , RandomData(R, 64))
